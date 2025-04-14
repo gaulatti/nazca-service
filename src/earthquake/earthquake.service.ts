@@ -19,6 +19,9 @@ export class EarthquakeService {
   private readonly TIME_WINDOW_MINUTES = 10;
   private readonly DISTANCE_THRESHOLD_KM = 50;
   private readonly EARTH_RADIUS_KM = 6371;
+  private readonly MAGNITUDE_DIFFERENCE_THRESHOLD = 1.0; // Reduced from 2.0
+  private readonly CLOSE_TIME_THRESHOLD = 2; // Events within 2 minutes are "very close in time"
+  private readonly SPATIAL_THRESHOLD_MODIFIER = 0.7; // Reduce spatial threshold for events close in time
 
   constructor(
     @InjectModel(Earthquake)
@@ -66,6 +69,47 @@ export class EarthquakeService {
     });
   }
 
+  private isDuplicateEvent(
+    newEvent: RegisterEarthquakeDto,
+    existingEvent: Earthquake,
+    timeDifferenceMinutes: number,
+  ): boolean {
+    // Calculate spatial distance
+    const distance = this.calculateHaversineDistance(
+      newEvent.latitude,
+      newEvent.longitude,
+      existingEvent.latitude,
+      existingEvent.longitude,
+    );
+
+    // Calculate magnitude difference
+    const magnitudeDiff = Math.abs(
+      newEvent.magnitude - existingEvent.magnitude,
+    );
+
+    // Adjust spatial threshold based on time proximity
+    const adjustedSpatialThreshold =
+      timeDifferenceMinutes <= this.CLOSE_TIME_THRESHOLD
+        ? this.DISTANCE_THRESHOLD_KM * this.SPATIAL_THRESHOLD_MODIFIER
+        : this.DISTANCE_THRESHOLD_KM;
+
+    // More strict magnitude comparison for events very close in time
+    if (timeDifferenceMinutes <= this.CLOSE_TIME_THRESHOLD) {
+      return (
+        distance <= adjustedSpatialThreshold &&
+        magnitudeDiff <= this.MAGNITUDE_DIFFERENCE_THRESHOLD
+      );
+    }
+
+    // For events further apart in time, be more lenient with magnitude differences
+    // but stricter with location if magnitudes are very different
+    if (magnitudeDiff > this.MAGNITUDE_DIFFERENCE_THRESHOLD) {
+      return distance <= adjustedSpatialThreshold * 0.5; // Much stricter spatial requirement
+    }
+
+    return distance <= adjustedSpatialThreshold;
+  }
+
   async register(data: RegisterEarthquakeDto): Promise<Earthquake> {
     const timestamp = new Date(data.timestamp);
     const timeWindow = new Date(
@@ -81,36 +125,34 @@ export class EarthquakeService {
       },
     });
 
-    // Check for spatial proximity
+    // Check for duplicates with new logic
     const duplicate = potentialDuplicates.find((eq) => {
-      const distance = this.calculateHaversineDistance(
-        data.latitude,
-        data.longitude,
-        eq.latitude,
-        eq.longitude,
+      const timeDiffMinutes = Math.abs(
+        (timestamp.getTime() - new Date(eq.timestamp).getTime()) / (1000 * 60),
       );
-      return distance <= this.DISTANCE_THRESHOLD_KM;
+      return this.isDuplicateEvent(data, eq, timeDiffMinutes);
     });
 
     if (duplicate) {
-      // Update existing record if new magnitude is larger or merge additional data
+      // Only update if the new magnitude is larger
       if (data.magnitude > duplicate.magnitude) {
         duplicate.magnitude = data.magnitude;
+        if (data.depth !== undefined) {
+          duplicate.depth = data.depth;
+        }
+        if (data.additionalData) {
+          duplicate.additionalData = {
+            ...duplicate.additionalData,
+            ...data.additionalData,
+          };
+        }
+        await duplicate.save();
+        return duplicate;
       }
-      if (data.depth !== undefined) {
-        duplicate.depth = data.depth;
-      }
-      if (data.additionalData) {
-        duplicate.additionalData = {
-          ...duplicate.additionalData,
-          ...data.additionalData,
-        };
-      }
-      await duplicate.save();
-      return duplicate;
+      return duplicate; // Return existing record without updating if magnitude is smaller
     }
 
-    // Create new record if no duplicate found
+    // Create new record if no duplicate found or magnitude difference is too large
     return this.earthquakeModel.create(data);
   }
 }
