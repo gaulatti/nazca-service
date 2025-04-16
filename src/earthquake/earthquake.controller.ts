@@ -17,7 +17,7 @@ export class EarthquakeController {
 
   @Get()
   async list() {
-    return this.earthquakeService.list();
+    return this.earthquakeService.list(true);
   }
 
   @Post('register')
