@@ -22,6 +22,8 @@ export class EarthquakeService {
   private readonly MAGNITUDE_DIFFERENCE_THRESHOLD = 1.0; // Reduced from 2.0
   private readonly CLOSE_TIME_THRESHOLD = 2; // Events within 2 minutes are "very close in time"
   private readonly SPATIAL_THRESHOLD_MODIFIER = 0.7; // Reduce spatial threshold for events close in time
+  private readonly NEAR_SIMULTANEOUS_THRESHOLD = 0.1; // Events within 6 seconds
+  private readonly SIMULTANEOUS_DISTANCE_THRESHOLD_KM = 100; // More lenient for simultaneous events
 
   constructor(
     @InjectModel(Earthquake)
@@ -74,7 +76,6 @@ export class EarthquakeService {
     existingEvent: Earthquake,
     timeDifferenceMinutes: number,
   ): boolean {
-    // Calculate spatial distance
     const distance = this.calculateHaversineDistance(
       newEvent.latitude,
       newEvent.longitude,
@@ -82,18 +83,24 @@ export class EarthquakeService {
       existingEvent.longitude,
     );
 
-    // Calculate magnitude difference
     const magnitudeDiff = Math.abs(
       newEvent.magnitude - existingEvent.magnitude,
     );
 
-    // Adjust spatial threshold based on time proximity
+    // Special handling for near-simultaneous events
+    if (timeDifferenceMinutes <= this.NEAR_SIMULTANEOUS_THRESHOLD) {
+      return (
+        distance <= this.SIMULTANEOUS_DISTANCE_THRESHOLD_KM &&
+        magnitudeDiff <= this.MAGNITUDE_DIFFERENCE_THRESHOLD
+      );
+    }
+
+    // Regular duplicate detection logic
     const adjustedSpatialThreshold =
       timeDifferenceMinutes <= this.CLOSE_TIME_THRESHOLD
         ? this.DISTANCE_THRESHOLD_KM * this.SPATIAL_THRESHOLD_MODIFIER
         : this.DISTANCE_THRESHOLD_KM;
 
-    // More strict magnitude comparison for events very close in time
     if (timeDifferenceMinutes <= this.CLOSE_TIME_THRESHOLD) {
       return (
         distance <= adjustedSpatialThreshold &&
@@ -101,10 +108,8 @@ export class EarthquakeService {
       );
     }
 
-    // For events further apart in time, be more lenient with magnitude differences
-    // but stricter with location if magnitudes are very different
     if (magnitudeDiff > this.MAGNITUDE_DIFFERENCE_THRESHOLD) {
-      return distance <= adjustedSpatialThreshold * 0.5; // Much stricter spatial requirement
+      return distance <= adjustedSpatialThreshold * 0.5;
     }
 
     return distance <= adjustedSpatialThreshold;
