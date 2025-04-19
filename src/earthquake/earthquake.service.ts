@@ -53,13 +53,13 @@ export class EarthquakeService {
 
   async list(last24Hours = false): Promise<Earthquake[]> {
     if (last24Hours) {
-      const oneDayAgo = new Date();
-      oneDayAgo.setHours(oneDayAgo.getHours() - 24);
+      const recent = new Date();
+      recent.setHours(recent.getHours() - 12);
 
       return this.earthquakeModel.findAll({
         where: {
           timestamp: {
-            [Op.gte]: oneDayAgo,
+            [Op.gte]: recent,
           },
         },
         order: [['timestamp', 'DESC']],
